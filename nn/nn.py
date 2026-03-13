@@ -312,13 +312,16 @@ class NeuralNetwork:
         if len(y_val.shape) == 1:
             y_val = y_val.reshape(-1, 1)
         
-        # Ensure y has shape [n_samples, n_outputs]
+        # Get number of samples from X_train
         n_samples = X_train.shape[0]
-        if y_train.shape[0] != n_samples:
+        n_val_samples = X_val.shape[0]
+        
+        # Ensure y has shape [n_samples, n_outputs]
+        # If y has more rows than samples, it's transposed
+        if y_train.shape[0] > n_samples and y_train.shape[1] == n_samples:
             y_train = y_train.T
         
-        n_val_samples = X_val.shape[0]
-        if y_val.shape[0] != n_val_samples:
+        if y_val.shape[0] > n_val_samples and y_val.shape[1] == n_val_samples:
             y_val = y_val.T
         
         for epoch in range(self._epochs):
