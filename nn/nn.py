@@ -30,7 +30,7 @@ class NeuralNetwork:
 
     def __init__(
         self,
-        nn_arch: List[Dict[str, Union(int, str)]],
+        nn_arch: List[Dict[str, Union[int, str]]],
         lr: float,
         seed: int,
         batch_size: int,
@@ -106,7 +106,18 @@ class NeuralNetwork:
             Z_curr: ArrayLike
                 Current layer linear transformed matrix.
         """
-        pass
+        # Linear transformation
+        Z_curr = np.dot(W_curr, A_prev) + b_curr
+        
+        # Apply activation function
+        if activation == 'sigmoid':
+            A_curr = self._sigmoid(Z_curr)
+        elif activation == 'relu':
+            A_curr = self._relu(Z_curr)
+        else:
+            raise ValueError(f"Unknown activation function: {activation}")
+        
+        return A_curr, Z_curr
 
     def forward(self, X: ArrayLike) -> Tuple[ArrayLike, Dict[str, ArrayLike]]:
         """
@@ -122,7 +133,29 @@ class NeuralNetwork:
             cache: Dict[str, ArrayLike]:
                 Dictionary storing Z and A matrices from `_single_forward` for use in backprop.
         """
-        pass
+        cache = {}
+        A_curr = X.T  # Transpose to [features, batch_size]
+        
+        # Forward pass through each layer
+        for idx, layer in enumerate(self.arch):
+            layer_idx = idx + 1
+            A_prev = A_curr
+            
+            # Get weights and biases
+            W_curr = self._param_dict['W' + str(layer_idx)]
+            b_curr = self._param_dict['b' + str(layer_idx)]
+            activation = layer['activation']
+            
+            # Single forward pass
+            A_curr, Z_curr = self._single_forward(W_curr, b_curr, A_prev, activation)
+            
+            # Store in cache for backprop
+            cache['A' + str(idx)] = A_prev
+            cache['Z' + str(layer_idx)] = Z_curr
+        
+        cache['A' + str(len(self.arch))] = A_curr
+        
+        return A_curr, cache
 
     def _single_backprop(
         self,
@@ -158,7 +191,25 @@ class NeuralNetwork:
             db_curr: ArrayLike
                 Partial derivative of loss function with respect to current layer bias matrix.
         """
-        pass
+        # Get batch size
+        m = A_prev.shape[1]
+        
+        # Compute dZ using activation derivative
+        if activation_curr == 'sigmoid':
+            dZ_curr = self._sigmoid_backprop(dA_curr, Z_curr)
+        elif activation_curr == 'relu':
+            dZ_curr = self._relu_backprop(dA_curr, Z_curr)
+        else:
+            raise ValueError(f"Unknown activation function: {activation_curr}")
+        
+        # Compute dW and db
+        dW_curr = np.dot(dZ_curr, A_prev.T) / m
+        db_curr = np.sum(dZ_curr, axis=1, keepdims=True) / m
+        
+        # Compute dA_prev
+        dA_prev = np.dot(W_curr.T, dZ_curr)
+        
+        return dA_prev, dW_curr, db_curr
 
     def backprop(self, y: ArrayLike, y_hat: ArrayLike, cache: Dict[str, ArrayLike]):
         """
@@ -177,7 +228,40 @@ class NeuralNetwork:
             grad_dict: Dict[str, ArrayLike]
                 Dictionary containing the gradient information from this pass of backprop.
         """
-        pass
+        grad_dict = {}
+        
+        # Compute dA for output layer based on loss function
+        if self._loss_func == 'binary_cross_entropy':
+            dA = self._binary_cross_entropy_backprop(y, y_hat)
+        elif self._loss_func == 'mean_squared_error':
+            dA = self._mean_squared_error_backprop(y, y_hat)
+        else:
+            raise ValueError(f"Unknown loss function: {self._loss_func}")
+        
+        # Backprop through each layer in reverse
+        for idx in reversed(range(len(self.arch))):
+            layer_idx = idx + 1
+            
+            # Get parameters
+            W_curr = self._param_dict['W' + str(layer_idx)]
+            b_curr = self._param_dict['b' + str(layer_idx)]
+            Z_curr = cache['Z' + str(layer_idx)]
+            A_prev = cache['A' + str(idx)]
+            activation = self.arch[idx]['activation']
+            
+            # Single backprop
+            dA_prev, dW_curr, db_curr = self._single_backprop(
+                W_curr, b_curr, Z_curr, A_prev, dA, activation
+            )
+            
+            # Store gradients
+            grad_dict['dW' + str(layer_idx)] = dW_curr
+            grad_dict['db' + str(layer_idx)] = db_curr
+            
+            # Update dA for next iteration
+            dA = dA_prev
+        
+        return grad_dict
 
     def _update_params(self, grad_dict: Dict[str, ArrayLike]):
         """
@@ -188,7 +272,9 @@ class NeuralNetwork:
             grad_dict: Dict[str, ArrayLike]
                 Dictionary containing the gradient information from most recent round of backprop.
         """
-        pass
+        for idx in range(1, len(self.arch) + 1):
+            self._param_dict['W' + str(idx)] -= self._lr * grad_dict['dW' + str(idx)]
+            self._param_dict['b' + str(idx)] -= self._lr * grad_dict['db' + str(idx)]
 
     def fit(
         self,
@@ -203,13 +289,13 @@ class NeuralNetwork:
 
         Args:
             X_train: ArrayLike
-                Input features of training set.
+                Input features of training set with shape [n_samples, n_features].
             y_train: ArrayLike
-                Labels for training set.
+                Labels for training set with shape [n_samples, n_outputs] or [n_outputs, n_samples].
             X_val: ArrayLike
-                Input features of validation set.
+                Input features of validation set with shape [n_samples, n_features].
             y_val: ArrayLike
-                Labels for validation set.
+                Labels for validation set with shape [n_samples, n_outputs] or [n_outputs, n_samples].
 
         Returns:
             per_epoch_loss_train: List[float]
@@ -217,7 +303,89 @@ class NeuralNetwork:
             per_epoch_loss_val: List[float]
                 List of per epoch loss for validation set.
         """
-        pass
+        per_epoch_loss_train = []
+        per_epoch_loss_val = []
+        
+        # Ensure y is 2D
+        if len(y_train.shape) == 1:
+            y_train = y_train.reshape(-1, 1)
+        if len(y_val.shape) == 1:
+            y_val = y_val.reshape(-1, 1)
+        
+        # Ensure y has shape [n_samples, n_outputs]
+        n_samples = X_train.shape[0]
+        if y_train.shape[0] != n_samples:
+            y_train = y_train.T
+        
+        n_val_samples = X_val.shape[0]
+        if y_val.shape[0] != n_val_samples:
+            y_val = y_val.T
+        
+        for epoch in range(self._epochs):
+            epoch_loss_train = 0.0
+            n_batches = 0
+            
+            # Shuffle training data
+            indices = np.random.permutation(n_samples)
+            X_shuffled = X_train[indices]
+            y_shuffled = y_train[indices]
+            
+            # Mini-batch training
+            for batch_idx in range(0, n_samples, self._batch_size):
+                # Get batch
+                batch_end = min(batch_idx + self._batch_size, n_samples)
+                X_batch = X_shuffled[batch_idx:batch_end]  # shape: [batch_size, n_features]
+                y_batch = y_shuffled[batch_idx:batch_end]  # shape: [batch_size, n_outputs]
+                
+                # Forward pass
+                y_hat, cache = self.forward(X_batch)  # y_hat shape: [n_outputs, batch_size]
+                
+                # Transpose y_batch for loss computation: [n_outputs, batch_size]
+                y_batch_transposed = y_batch.T
+                
+                # Compute loss
+                loss = self._compute_loss(y_batch_transposed, y_hat)
+                epoch_loss_train += loss
+                n_batches += 1
+                
+                # Backward pass
+                grad_dict = self.backprop(y_batch_transposed, y_hat, cache)
+                
+                # Update parameters
+                self._update_params(grad_dict)
+            
+            # Average training loss for epoch
+            avg_train_loss = epoch_loss_train / n_batches if n_batches > 0 else 0
+            per_epoch_loss_train.append(avg_train_loss)
+            
+            # Validation loss
+            y_hat_val, _ = self.forward(X_val)
+            y_val_transposed = y_val.T
+            val_loss = self._compute_loss(y_val_transposed, y_hat_val)
+            per_epoch_loss_val.append(val_loss)
+        
+        return per_epoch_loss_train, per_epoch_loss_val
+    
+    def _compute_loss(self, y: ArrayLike, y_hat: ArrayLike) -> float:
+        """
+        Compute loss given ground truth and predictions.
+        
+        Args:
+            y: ArrayLike
+                Ground truth labels [output_dim, batch_size].
+            y_hat: ArrayLike
+                Predicted output [output_dim, batch_size].
+        
+        Returns:
+            loss: float
+                Loss value.
+        """
+        if self._loss_func == 'binary_cross_entropy':
+            return self._binary_cross_entropy(y, y_hat)
+        elif self._loss_func == 'mean_squared_error':
+            return self._mean_squared_error(y, y_hat)
+        else:
+            raise ValueError(f"Unknown loss function: {self._loss_func}")
 
     def predict(self, X: ArrayLike) -> ArrayLike:
         """
@@ -231,7 +399,8 @@ class NeuralNetwork:
             y_hat: ArrayLike
                 Prediction from the model.
         """
-        pass
+        y_hat, _ = self.forward(X)
+        return y_hat.T  # Transpose back to [batch_size, output_dim]
 
     def _sigmoid(self, Z: ArrayLike) -> ArrayLike:
         """
@@ -245,7 +414,7 @@ class NeuralNetwork:
             nl_transform: ArrayLike
                 Activation function output.
         """
-        pass
+        return 1 / (1 + np.exp(-Z))
 
     def _sigmoid_backprop(self, dA: ArrayLike, Z: ArrayLike):
         """
@@ -261,7 +430,9 @@ class NeuralNetwork:
             dZ: ArrayLike
                 Partial derivative of current layer Z matrix.
         """
-        pass
+        sig = self._sigmoid(Z)
+        dZ = dA * sig * (1 - sig)
+        return dZ
 
     def _relu(self, Z: ArrayLike) -> ArrayLike:
         """
@@ -275,7 +446,7 @@ class NeuralNetwork:
             nl_transform: ArrayLike
                 Activation function output.
         """
-        pass
+        return np.maximum(0, Z)
 
     def _relu_backprop(self, dA: ArrayLike, Z: ArrayLike) -> ArrayLike:
         """
@@ -291,7 +462,9 @@ class NeuralNetwork:
             dZ: ArrayLike
                 Partial derivative of current layer Z matrix.
         """
-        pass
+        dZ = dA.copy()
+        dZ[Z <= 0] = 0
+        return dZ
 
     def _binary_cross_entropy(self, y: ArrayLike, y_hat: ArrayLike) -> float:
         """
@@ -307,7 +480,9 @@ class NeuralNetwork:
             loss: float
                 Average loss over mini-batch.
         """
-        pass
+        m = y.shape[1]
+        loss = -np.mean(y * np.log(y_hat + 1e-8) + (1 - y) * np.log(1 - y_hat + 1e-8))
+        return loss
 
     def _binary_cross_entropy_backprop(self, y: ArrayLike, y_hat: ArrayLike) -> ArrayLike:
         """
@@ -323,7 +498,8 @@ class NeuralNetwork:
             dA: ArrayLike
                 partial derivative of loss with respect to A matrix.
         """
-        pass
+        dA = -(y / (y_hat + 1e-8) - (1 - y) / (1 - y_hat + 1e-8))
+        return dA
 
     def _mean_squared_error(self, y: ArrayLike, y_hat: ArrayLike) -> float:
         """
@@ -339,7 +515,8 @@ class NeuralNetwork:
             loss: float
                 Average loss of mini-batch.
         """
-        pass
+        loss = np.mean((y_hat - y) ** 2)
+        return loss
 
     def _mean_squared_error_backprop(self, y: ArrayLike, y_hat: ArrayLike) -> ArrayLike:
         """
@@ -355,4 +532,5 @@ class NeuralNetwork:
             dA: ArrayLike
                 partial derivative of loss with respect to A matrix.
         """
-        pass
+        dA = 2 * (y_hat - y) / y.shape[1]
+        return dA
